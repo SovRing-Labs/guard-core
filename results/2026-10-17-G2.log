@@ -1,0 +1,3 @@
+Command: python3 bin/guard-core --help >/dev/null
+Machine: Intel i5-8365U laptop; date: 2026-10-17T11:08:34.123055+00:00
+Exit: 0

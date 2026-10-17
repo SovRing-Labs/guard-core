@@ -1,0 +1,4 @@
+Command: python3 tests/guard_demo.py
+Machine: Intel i5-8365U laptop; date: 2026-10-17T11:08:33.996702+00:00
+Exit: 0
+{"pass": true, "baseline_files": 1, "checks": ["unchanged", "dirty", "committed", "new", "removed"], "lookup_us_mean": 41.819}

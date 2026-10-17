@@ -1,0 +1,16 @@
+{
+ "repo": "guard-core",
+ "group": "core",
+ "lang": "Python",
+ "stage": "about 30 %",
+ "needs": [
+  "python3",
+  "git"
+ ],
+ "deps": "",
+ "quicktest": "python3 tests/guard_demo.py",
+ "expect": "PASS",
+ "gui": "bash install.sh",
+ "licence": "PolyForm Small Business 1.0.0 OR PolyForm Noncommercial 1.0.0 OR PolyForm Free Trial 1.0.0 (code); CC BY 4.0 (documents)",
+ "pip": []
+}

@@ -1,0 +1,21 @@
+# guard-core
+
+> Receipt-reconciled file-integrity baseline for your own files.
+
+Setup: `git clone --depth 1 https://github.com/SovRing-Labs/guard-core && cd guard-core && python3 tests/guard_demo.py` (expect: PASS).
+Status: pre-alpha, under development — read STATUS.md before relying on a number.
+Licence: PolyForm Small Business 1.0.0 OR PolyForm Noncommercial 1.0.0 OR PolyForm Free Trial 1.0.0 (code); CC BY 4.0 (documents).
+
+## Docs
+- [README.md](https://raw.githubusercontent.com/SovRing-Labs/guard-core/main/README.md)
+- [STATUS.md](https://raw.githubusercontent.com/SovRing-Labs/guard-core/main/STATUS.md)
+- [suite.json](https://raw.githubusercontent.com/SovRing-Labs/guard-core/main/suite.json)
+- [TECHNICAL-DISCLOSURE.md](https://raw.githubusercontent.com/SovRing-Labs/guard-core/main/TECHNICAL-DISCLOSURE.md)
+- [PROVENANCE.md](https://raw.githubusercontent.com/SovRing-Labs/guard-core/main/PROVENANCE.md)
+- [LICENSING.md](https://raw.githubusercontent.com/SovRing-Labs/guard-core/main/LICENSING.md)
+- [DATA.md](https://raw.githubusercontent.com/SovRing-Labs/guard-core/main/DATA.md)
+- [CITATION.cff](https://raw.githubusercontent.com/SovRing-Labs/guard-core/main/CITATION.cff)
+- [AGENTS.md](https://raw.githubusercontent.com/SovRing-Labs/guard-core/main/AGENTS.md)
+
+## Optional
+- [SovRing umbrella (all repos, MCP setup)](https://github.com/SovRing-Labs/SovRing)

@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+# TIER: beneficial
+# OWNER: claude-seat
+"""guard-core — GUARD-CORE G0: receipt-reconciled file-integrity baseline for our own machine (CYCLONE-SHIELD-0 D1.5, 2026-10-14).
+Brief: STATUS.md (G0 scope J 10-10). Detect + report only; never quarantines, kills or blocks.
+
+  guard-core baseline [--stats]        hash every file under the roots, ring-address each path, write the baseline
+  guard-core check [--json]            re-hash; each file gets a ternary verdict:
+                                         +1 unchanged, or changed and the change has a git receipt (committed, clean in the work tree)
+                                          0 new or changed without a receipt we can read (untracked roots: systemd, ~/.local/bin, opencode)
+                                         -1 changed under git but NOT committed (dirty) or removed
+  guard-core lookup PATH               baseline row by ring address (no scan)
+Roots: owned-workspace bin/, projects/*/bin, ~/.config/systemd/user, ~/.local/bin, ~/.config/opencode (files ≤ 5 MB).
+Store: control-center/guard-core/baseline.db (SQLite; reader = check / lookup / --stats in this file).
+Ring address: path → sha256 → residues on the T25 group-1 moduli (3, 29, 41, 59, 101; product 21,041,931 slots) + bucket list.
+"""
+import argparse, hashlib, json, os, sqlite3, subprocess, sys, time
+
+HOME = os.path.expanduser("~")
+AI = os.path.abspath(os.environ.get("GUARD_ROOT", os.getcwd()))
+DB = os.environ.get("GUARD_DB", os.path.join(HOME, ".local", "state", "guard-core", "baseline.db"))
+MODS = (3, 29, 41, 59, 101)
+MAXB = 5 * 1024 * 1024
+
+
+def roots():
+    r = [os.path.join(AI, "bin")]
+    pj = os.path.join(AI, "projects")
+    r += sorted(os.path.join(pj, d, "bin") for d in (os.listdir(pj) if os.path.isdir(pj) else []) if os.path.isdir(os.path.join(pj, d, "bin")))
+    r += [os.path.join(HOME, ".config/systemd/user"), os.path.join(HOME, ".local/bin"), os.path.join(HOME, ".config/opencode")]
+    return [x for x in r if os.path.isdir(x)]
+
+
+def files():
+    for r in roots():
+        for dp, dn, fn in os.walk(r):
+            dn[:] = [d for d in dn if d not in (".git", "node_modules", "__pycache__")]
+            for f in fn:
+                p = os.path.join(dp, f)
+                if os.path.islink(p) or not os.path.isfile(p): continue
+                try:
+                    if os.path.getsize(p) <= MAXB: yield p
+                except OSError: pass
+
+
+def sha(p):
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""): h.update(b)
+    return h.hexdigest()
+
+
+def addr(path):
+    v = int.from_bytes(hashlib.sha256(path.encode()).digest()[:8], "big")
+    return tuple(v % m for m in MODS)
+
+
+def slot(a):
+    s, mult = 0, 1
+    for r, m in zip(a, MODS): s += r * mult; mult *= m
+    return s
+
+
+def git_state(paths):
+    """path -> 'clean' | 'dirty' | 'untracked' for files inside the owned-workspace repo; others -> 'no-git'."""
+    inside = [p for p in paths if p.startswith(AI + "/")]
+    st = {p: "no-git" for p in paths}
+    rel = {os.path.relpath(p, AI): p for p in inside}
+    tracked = set(subprocess.run(["git", "-C", AI, "ls-files", "-z", "bin", "projects"], capture_output=True, text=True).stdout.split("\0"))
+    dirty = set()
+    out = subprocess.run(["git", "-C", AI, "status", "--porcelain", "-z", "--", "bin", "projects"], capture_output=True, text=True).stdout
+    for e in out.split("\0"):
+        if len(e) > 3: dirty.add(e[3:])
+    for r, p in rel.items():
+        st[p] = ("dirty" if r in dirty else "clean") if r in tracked else "untracked"
+    return st
+
+
+def head():
+    return subprocess.run(["git", "-C", AI, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+
+def cmd_baseline(a):
+    t0 = time.time()
+    ps = list(files())
+    gs = git_state(ps)
+    rows = []
+    for p in ps:
+        try: s = os.stat(p); h = sha(p)
+        except OSError: continue
+        rows.append((p, slot(addr(p)), h, s.st_size, int(s.st_mtime), s.st_mode & 0o7777, gs[p]))
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
+    tmp = DB + ".tmp"
+    if os.path.exists(tmp): os.remove(tmp)
+    c = sqlite3.connect(tmp)
+    c.execute("CREATE TABLE f (path TEXT PRIMARY KEY, slot INTEGER, sha TEXT, size INTEGER, mtime INTEGER, mode INTEGER, receipt TEXT)")
+    c.execute("CREATE INDEX f_slot ON f(slot)")
+    c.execute("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)")
+    c.executemany("INSERT INTO f VALUES (?,?,?,?,?,?,?)", rows)
+    build_s = time.time() - t0
+    c.executemany("INSERT INTO meta VALUES (?,?)", [("built", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())), ("git_head", head()),
+                                                    ("build_s", f"{build_s:.2f}"), ("roots", json.dumps(roots()))])
+    c.commit(); c.close(); os.replace(tmp, DB)
+    if a.stats: print(json.dumps(stats(build_s), indent=1))
+    else: print(f"guard-core: baseline {len(rows)} files in {build_s:.1f} s -> {DB}")
+
+
+def load():
+    if not os.path.exists(DB): sys.exit("guard-core: no baseline — run `guard-core baseline` first")
+    c = sqlite3.connect(DB)
+    table = {}
+    for p, sl, h, sz, mt, md, rc in c.execute("SELECT path, slot, sha, size, mtime, mode, receipt FROM f"):
+        table.setdefault(sl, []).append((p, h, sz, mt, md, rc))
+    meta = dict(c.execute("SELECT k, v FROM meta")); c.close()
+    return table, meta
+
+
+def lookup(table, p):
+    for row in table.get(slot(addr(p)), ()):
+        if row[0] == p: return row
+    return None
+
+
+def stats(build_s=None):
+    table, meta = load()
+    paths = [r[0] for b in table.values() for r in b]
+    rc = {}
+    for b in table.values():
+        for r in b: rc[r[5]] = rc.get(r[5], 0) + 1
+    t0 = time.perf_counter()
+    for p in paths: lookup(table, p)
+    per = (time.perf_counter() - t0) / max(1, len(paths))
+    return {"files": len(paths), "roots": json.loads(meta["roots"]), "build_s": float(build_s if build_s is not None else meta["build_s"]),
+            "lookup_us_mean": round(per * 1e6, 3), "slots_used": len(table), "max_bucket": max(len(b) for b in table.values()),
+            "receipts": rc, "git_head": meta["git_head"], "built": meta["built"], "db": DB, "db_bytes": os.path.getsize(DB)}
+
+
+def cmd_check(a):
+    table, meta = load()
+    now = list(files()); gs = git_state(now); seen = set(); out = {1: [], 0: [], -1: []}
+    for p in now:
+        row = lookup(table, p); seen.add(p)
+        try: h = sha(p)
+        except OSError: continue
+        if row is None: out[0].append((p, "new"))
+        elif row[1] == h: out[1].append((p, "unchanged"))
+        elif gs[p] == "clean": out[1].append((p, "changed, committed"))
+        elif gs[p] == "dirty": out[-1].append((p, "changed, not committed"))
+        else: out[0].append((p, "changed, no receipt (" + gs[p] + ")"))
+    for b in table.values():
+        for r in b:
+            if r[0] not in seen: out[-1].append((r[0], "removed"))
+    if a.json: print(json.dumps({str(k): v for k, v in out.items()}, indent=1)); return
+    print(f"guard-core check vs baseline {meta['built']} (git {meta['git_head']}): +1 {len(out[1])} · 0 {len(out[0])} · -1 {len(out[-1])}")
+    for k in (-1, 0):
+        for p, why in out[k][:40]: print(f"  {k:+d}  {why:<32} {p}")
+
+
+def cmd_lookup(a):
+    table, _ = load(); r = lookup(table, os.path.abspath(a.path))
+    print(json.dumps(dict(zip(("path", "sha", "size", "mtime", "mode", "receipt"), r)) if r else None, indent=1))
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="guard-core", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = ap.add_subparsers(dest="cmd", required=True)
+    b = sp.add_parser("baseline"); b.add_argument("--stats", action="store_true"); b.set_defaults(fn=cmd_baseline)
+    c = sp.add_parser("check"); c.add_argument("--json", action="store_true"); c.set_defaults(fn=cmd_check)
+    l = sp.add_parser("lookup"); l.add_argument("path"); l.set_defaults(fn=cmd_lookup)
+    a = ap.parse_args(); a.fn(a)
+
+
+if __name__ == "__main__":
+    main()

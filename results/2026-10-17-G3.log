@@ -1,0 +1,4 @@
+Command: python3 -c "assert 'No process monitor' in open('STATUS.md').read(); print('PASS')"
+Machine: Intel i5-8365U laptop; date: 2026-10-17T11:08:34.195522+00:00
+Exit: 0
+PASS
